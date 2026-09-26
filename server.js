@@ -1,39 +1,16 @@
-import { ApolloServer } from '@apollo/server';
-import { startStandaloneServer } from '@apollo/server/standalone';
+﻿import { ApolloServer } from "@apollo/server";
+import { startStandaloneServer } from "@apollo/server/standalone";
+import DataLoader from "dataloader";
+import { db } from "./database.js";
 
-// 1. SIMULACIÓN DE LA BASE DE DATOS (MOCK DB)
-const CLIENTES_DB = [
-    { id: "c-1", nombre: "Corporación Alfa", sector: "Finanzas" },
-    { id: "c-2", nombre: "Logística Beta", sector: "Transporte" },
-    { id: "c-3", nombre: "Industrias Gamma", sector: "Manufactura" }
-];
-
-const FACTURAS_DB = [
-    { id: "f-1", clienteId: "c-1", monto: 1500.00 },
-    { id: "f-2", clienteId: "c-1", monto: 2300.50 },
-    { id: "f-3", clienteId: "c-2", monto: 450.00 },
-    { id: "f-4", clienteId: "c-3", monto: 8900.00 }
-];
-
-// Helper para simular latencia de red (200ms)
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-const db = {
-    async fetchAllClientes() {
-        console.log("\x1b[36m%s\x1b[0m", "[DB READ] SELECT * FROM clientes;");
-        await delay(200); 
-        return CLIENTES_DB;
-    },
-    // Método que causará el problema N+1
-    async fetchFacturasByClienteId(clienteId) {
-        console.log("\x1b[31m%s\x1b[0m", `[DB READ] SELECT * FROM facturas WHERE cliente_id = '${clienteId}';`);
-        await delay(200);
-        return FACTURAS_DB.filter(f => f.clienteId === clienteId);
-    }
-};
-
-// 2. DEFINICIÓN DEL ESQUEMA (SDL)
+// Esquema GraphQL (schema-first): un solo grafo de clientes y sus facturas.
 const typeDefs = `#graphql
+  type Factura {
+    id: ID!
+    monto: Float!
+    estado: String!
+  }
+
   type Cliente {
     id: ID!
     nombre: String!
@@ -41,31 +18,55 @@ const typeDefs = `#graphql
     facturas: [Factura!]!
   }
 
-  type Factura {
-    id: ID!
-    monto: Float!
-  }
-
   type Query {
+    """Antes: 1 lectura de clientes + 1 lectura de facturas por cada cliente (N+1)."""
     clientes: [Cliente!]!
+
+    """Después: 1 lectura de clientes + 1 sola lectura en lote de todas las facturas."""
+    clientesOptimizado: [Cliente!]!
   }
 `;
 
-// 3. RESOLUTORES (IMPLEMENTACIÓN INGENUA)
-// Los estudiantes deberán modificar este archivo para inyectar el DataLoader desde el contexto
+// Un DataLoader nuevo por petición HTTP. Así el caché no se comparte entre usuarios.
+function crearLoaders() {
+  return {
+    facturasPorCliente: new DataLoader((clienteIds) =>
+      db.fetchFacturasByClienteIdsBatch(clienteIds)
+    ),
+  };
+}
+
 const resolvers = {
-    Query: {
-        clientes: async () => await db.fetchAllClientes(),
+  Query: {
+    clientes: async () => {
+      console.log("\n----- ANTES: sin DataLoader (problema N+1) -----");
+      const clientes = await db.fetchAllClientes();
+      return clientes.map((cliente) => ({ ...cliente, usarDataLoader: false }));
     },
-    Cliente: {
-        facturas: async (parent) => {
-            // El 'parent' es el cliente actual. GraphQL llama a esta función por CADA cliente devuelto.
-            return await db.fetchFacturasByClienteId(parent.id);
-        }
-    }
+    clientesOptimizado: async () => {
+      console.log("\n----- DESPUES: con DataLoader (un solo lote) -----");
+      const clientes = await db.fetchAllClientes();
+      return clientes.map((cliente) => ({ ...cliente, usarDataLoader: true }));
+    },
+  },
+  Cliente: {
+    facturas: (cliente, _args, context) => {
+      if (cliente.usarDataLoader) {      
+        return context.loaders.facturasPorCliente.load(cliente.id);
+      }     
+      return db.fetchFacturasByClienteId(cliente.id);
+    },
+  },
 };
 
-// 4. INICIALIZACIÓN DEL SERVIDOR
 const server = new ApolloServer({ typeDefs, resolvers });
-const { url } = await startStandaloneServer(server, { listen: { port: 4000 } });
-console.log(`🚀 Servidor listo en Académico listo en: ${url}`);
+
+const { url } = await startStandaloneServer(server, {
+  listen: { port: 4000 },
+  context: async () => ({
+    loaders: crearLoaders(),
+  }),
+});
+
+console.log(`Servidor listo en: ${url}`);
+console.log("Abre esa URL y ejecuta las consultas clientes y clientesOptimizado.");

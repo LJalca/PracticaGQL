@@ -1,10 +1,4 @@
-/**
- * LogiTech SaaS - Simulación de Infraestructura de Base de Datos
- * Materia: Patrones de Diseño de APIs (Maestría)
- * 
- * Este módulo emula un motor de base de datos relacional con latencia de red.
- */
-
+﻿
 // Datos crudos en memoria (Mock Data)
 const CLIENTES_RECORDS = [
     { id: "c-1", nombre: "Corporación Alfa", sector: "Finanzas" },
@@ -39,7 +33,6 @@ export const db = {
 
     /**
      * Recupera las facturas de un cliente específico.
-     * ¡ATENCIÓN!: Esta es la función que disparará el problema N+1 en la solución ingenua.
      */
     async fetchFacturasByClienteId(clienteId) {
         console.log("\x1b[31m%s\x1b[0m", `[DB READ] SELECT * FROM facturas WHERE cliente_id = '${clienteId}';`);
@@ -49,14 +42,12 @@ export const db = {
 
     /**
      * FUNCIÓN OPTIMIZADA PARA EL DATALOADER
-     * Recupera las facturas de múltiples clientes utilizando una sola sentencia agrupada (Batch).
-     * Los estudiantes deberán invocar esto dentro de su DataLoader.
      */
     async fetchFacturasByClienteIdsBatch(clienteIds) {
-        console.log("\x1b[32m%s\x1b[0m", `[DB BATCH READ] SELECT * FROM facturas WHERE cliente_id IN (${clienteIds.map(id => `'\${id}'`).join(', ')});`);
-        await delay(200); // Mismo delay, pero trae la información de TODOS los ids provistos de un solo golpe.
+        console.log("\x1b[32m%s\x1b[0m", `[DB BATCH READ] SELECT * FROM facturas WHERE cliente_id IN (${clienteIds.map(id => `'${id}'`).join(", ")});`);
+        await delay(200); 
         
-        // Retorna un arreglo mapeado donde cada índice corresponde estrictamente a las llaves solicitadas (Restricción de DataLoader)
+        // Retorna un arreglo mapeado donde cada índice corresponde estrictamente a las llaves solicitadas 
         return clienteIds.map(id => 
             FACTURAS_RECORDS.filter(factura => factura.clienteId === id)
         );
